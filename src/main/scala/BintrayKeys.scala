@@ -29,14 +29,8 @@ trait BintrayKeys {
   val bintrayVersionAttributes = settingKey[AttrMap](
     "List of bintray version metadata attributes")
 
-  val bintrayCredentialsFile = settingKey[File](
-    "File containing bintray api credentials")
-
   val bintrayPackageVersions = taskKey[Seq[String]](
     "List bintray versions for the current package")
-
-  val bintrayChangeCredentials = taskKey[Unit](
-    "Change your current bintray credentials")
 
   val bintrayWhoami = taskKey[String](
     "Print the name of the currently authenticated bintray user")

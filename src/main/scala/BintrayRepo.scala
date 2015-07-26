@@ -3,6 +3,7 @@ package bintray
 import sbt._
 import Bintray._
 import bintry.{ Attr, Client, Licenses }
+import bintray.BintrayCredentials._
 import dispatch.Http
 
 case class BintrayRepo(credential: BintrayCredentials, org: Option[String], repoName: String) extends DispatchHandlers {
@@ -48,18 +49,6 @@ case class BintrayRepo(credential: BintrayCredentials, org: Option[String], repo
         }
       if (!exists) sys.error(
         s"was not able to find or create a package for $owner in $repo named $packageName")
-    }
-
-  def buildPublishResolver(packageName: String, vers: String, mvnStyle: Boolean,
-    isSbtPlugin: Boolean, isRelease: Boolean): Resolver =
-    {
-      val pkg = repo.get(packageName)
-      // warn the user that bintray expects maven published artifacts to be published to the `maven` repo
-      // but they have explicitly opted into a publish style and/or repo that
-      // deviates from that expecation
-      if (Bintray.defaultMavenRepository == repo && !mvnStyle) println(
-        "you have opted to publish to a repository named 'maven' but publishMavenStyle is assigned to false. This may result in unexpected behavior")
-      Bintray.publishTo(repo, pkg, vers, mvnStyle, isSbtPlugin, isRelease)
     }
 
   def upload(packageName: String, vers: String, path: String, f: File, log: Logger): Unit =
@@ -120,8 +109,7 @@ case class BintrayRepo(credential: BintrayCredentials, org: Option[String], repo
   def syncMavenCentral(packageName: String, vers: String, creds: Seq[Credentials], log: Logger): Unit =
     {
       val btyVersion = repo.get(packageName).version(vers)
-      val BintrayCredentials(sonauser, sonapass) =
-        resolveSonatypeCredentials(creds)
+      val BintrayCredentials(sonauser, sonapass) = sonatypeCredentials(creds)
       await.result(
         btyVersion.mavenCentralSync(sonauser, sonapass)(asStatusAndBody)) match {
         case (200, body) =>
@@ -140,42 +128,12 @@ case class BintrayRepo(credential: BintrayCredentials, org: Option[String], repo
         }
     }
 
-  private def resolveSonatypeCredentials(
-    creds: Seq[sbt.Credentials]): BintrayCredentials =
-    Credentials.forHost(creds, BintrayCredentials.sonatype.Host)
-      .map { d => (d.userName, d.passwd) }
-      .getOrElse(requestSonatypeCredentials) match {
-        case (user, pass) => BintrayCredentials(user, pass)
-      }
-
-  /** Search Sonatype credentials in the following order:
-   *  1. Cache
-   *  2. System properties
-   *  3. Environment variables
-   *  4. User input */
-  private def requestSonatypeCredentials: (String, String) = {
-    val cached = Cache.getMulti("sona.user", "sona.pass")
-    (cached("sona.user"), cached("sona.pass")) match {
-      case (Some(user), Some(pass)) =>
-        (user, pass)
-      case _ =>
-        val propsCredentials = for (name <- sys.props.get("sona.user"); pass <- sys.props.get("sona.pass")) yield (name, pass)
-        propsCredentials match {
-          case Some((name, pass)) => (name, pass)
-          case _ =>
-            val envCredentials = for (name <- sys.env.get("SONA_USER"); pass <- sys.env.get("SONA_PASS")) yield (name, pass)
-            envCredentials.getOrElse {
-              val name = Prompt("Enter sonatype username").getOrElse {
-                sys.error("sonatype username required")
-              }
-              val pass = Prompt.descretely("Enter sonatype password").getOrElse {
-                sys.error("sonatype password is required")
-              }
-              (name, pass)
-            }
-        }
-    }
-  }
+  /** Get Sonatype credentials from sbt credentials
+   **/
+  private def sonatypeCredentials(creds: Seq[sbt.Credentials]): BintrayCredentials =
+    sbtCredentials(creds, sonatype.Host)
+      .map((BintrayCredentials.apply _).tupled)
+      .getOrElse(sys.error("sonatype credentials required"))
 
   /** Lists versions of bintray packages corresponding to the current project */
   def packageVersions(packageName: String, log: Logger): Seq[String] =

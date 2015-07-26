@@ -1,7 +1,8 @@
 package bintray
 
 import bintry.Attr
-import sbt.{ AutoPlugin, Credentials, Global, Path, Resolver, Setting, Task, Tags, ThisBuild }
+import bintray.BintrayCredentials._
+import sbt._
 import sbt.Classpaths.publishTask
 import sbt.Def.{ Initialize, setting, task, taskDyn }
 import sbt.Keys._
@@ -13,7 +14,7 @@ object BintrayPlugin extends AutoPlugin {
 
   override def requires = sbt.plugins.JvmPlugin
   override def trigger = allRequirements
-  
+
   override def globalSettings: Seq[Setting[_]] = globalPublishSettings
   override def buildSettings: Seq[Setting[_]] = buildPublishSettings
   override def projectSettings: Seq[Setting[_]] = bintraySettings
@@ -27,11 +28,8 @@ object BintrayPlugin extends AutoPlugin {
     bintrayCommonSettings ++ bintrayPublishSettings ++ bintrayQuerySettings
 
   def bintrayCommonSettings: Seq[Setting[_]] = Seq(
-    bintrayChangeCredentials := {
-      Bintray.changeCredentials(bintrayCredentialsFile.value)
-    },
     bintrayWhoami := {
-      Bintray.whoami(bintrayCredentialsFile.value, sLog.value)
+      Bintray.whoami(bintrayCredentials(credentials.value), sLog.value)
     }
   )
 
@@ -39,8 +37,10 @@ object BintrayPlugin extends AutoPlugin {
     bintrayPackageVersions <<= packageVersionsTask
   )
 
+  def bintrayCredentials(allCredentials: Seq[Credentials]) =
+    sbtCredentials(allCredentials, api.Host).map((BintrayCredentials.apply _).tupled)
+
   def globalPublishSettings: Seq[Setting[_]] = Seq(
-    bintrayCredentialsFile in Global := Path.userHome / ".bintray" / ".credentials",
     concurrentRestrictions in Global += Tags.exclusive(Git)
   )
 
@@ -65,17 +65,10 @@ object BintrayPlugin extends AutoPlugin {
     },
     bintrayPackageLabels := Nil,
     description in bintray <<= description,
-    // note: publishTo may not have dependencies. therefore, we can not rely well on inline overrides
-    // for inline credentials resolution we recommend defining bintrayCredentials _before_ mixing in the defaults
-    // perhaps we should try overriding something in the publishConfig setting -- https://github.com/sbt/sbt-pgp/blob/master/pgp-plugin/src/main/scala/com/typesafe/sbt/pgp/PgpSettings.scala#L124-L131
-    publishTo in bintray <<= publishToBintray,
-    resolvers in bintray := {
-      Bintray.buildResolvers(bintrayCredentialsFile.value,
+    fullResolvers in bintray := {
+      Bintray.buildResolvers(bintrayCredentials(credentials.value),
         bintrayOrganization.value,
         bintrayRepository.value)
-    },
-    credentials in bintray := {
-      Credentials(bintrayCredentialsFile.value) :: Nil
     },
     bintrayPackageAttributes := {
       if (sbtPlugin.value) Map(AttrNames.sbtPlugin -> Seq(Attr.Boolean(sbtPlugin.value)))
@@ -95,7 +88,7 @@ object BintrayPlugin extends AutoPlugin {
       Bintray.ensureLicenses(licenses.value, bintrayOmitLicense.value)
     },
     bintrayEnsureCredentials := {
-      Bintray.ensuredCredentials(bintrayCredentialsFile.value).get
+      Bintray.ensuredCredentials(bintrayCredentials(credentials.value)).get
     },
     bintrayEnsureBintrayPackageExists <<= ensurePackageTask,
     bintrayUnpublish := {
@@ -118,9 +111,7 @@ object BintrayPlugin extends AutoPlugin {
       repo.release(bintrayPackage.value, version.value, sLog.value)
     }
   ) ++ Seq(
-    resolvers <++= resolvers in bintray,
-    credentials <++= credentials in bintray,
-    publishTo <<= publishTo in bintray, 
+    fullResolvers <++= fullResolvers in bintray,
     publish := dynamicallyPublish.value
   )
 
@@ -131,7 +122,7 @@ object BintrayPlugin extends AutoPlugin {
 
   // uses taskDyn because it can return one of two potential tasks
   // as its result, each with their own dependencies
-  // see also: http://www.scala-sbt.org/0.13/docs/Tasks.html#Dynamic+Computations+with 
+  // see also: http://www.scala-sbt.org/0.13/docs/Tasks.html#Dynamic+Computations+with
   private def dynamicallyPublish: Initialize[Task[Unit]] =
     taskDyn {
       (if (bintrayReleaseOnPublish.value) bintrayRelease else warnToRelease).dependsOn(publishTask(publishConfiguration, deliver))
@@ -155,7 +146,7 @@ object BintrayPlugin extends AutoPlugin {
   private def ensurePackageTask: Initialize[Task[Unit]] =
     task {
       val vcs = bintrayVcsUrl.value.getOrElse {
-        sys.error("""bintrayVcsUrl not defined. assign this with bintrayVcsUrl := Some("git@github.com:you/your-repo.git")""")
+        sys.error("""bintrayVcsUrl not defined. Add a git remote or assign with bintrayVcsUrl := Some("git@github.com:you/your-repo.git")""")
       }
       val repo = bintrayRepo.value
       repo.ensurePackage(bintrayPackage.value,
@@ -166,29 +157,12 @@ object BintrayPlugin extends AutoPlugin {
         bintrayPackageLabels.value)
     }
 
-  /** set a user-specific bintray endpoint for sbt's `publishTo` setting.*/
-  private def publishToBintray: Initialize[Option[Resolver]] =
-    setting {
-      val credsFile = bintrayCredentialsFile.value
-      val btyOrg = bintrayOrganization.value
-      val repoName = bintrayRepository.value
-      // ensure that we have credentials to build a resolver that can publish to bintray
-      Bintray.withRepo(credsFile, btyOrg, repoName, prompt = false) { repo =>
-        repo.buildPublishResolver(bintrayPackage.value,
-          version.value,
-          publishMavenStyle.value,
-          sbtPlugin.value,
-          bintrayReleaseOnPublish.value)
-      }
-    }
-
   /** Lists versions of bintray packages corresponding to the current project */
   private def packageVersionsTask: Initialize[Task[Seq[String]]] =
     task {
-      val credsFile = bintrayCredentialsFile.value
       val btyOrg = bintrayOrganization.value
       val repoName = bintrayRepository.value
-      (Bintray.withRepo(credsFile, btyOrg, repoName) { repo =>
+      (Bintray.withRepo(bintrayCredentials(credentials.value), btyOrg, repoName) { repo =>
         repo.packageVersions(bintrayPackage.value, sLog.value)
       }).getOrElse(Nil)
     }
