@@ -43,9 +43,9 @@ object Bintray {
       }
     }
 
-  def withRepo[A](credsFile: File, creds: Option[BintrayCredentials], org: Option[String], repoName: String, prompt: Boolean = true)
+  def withRepo[A](credsFile: File, creds: Option[BintrayCredentials], org: Option[String], repoName: String)
     (f: BintrayRepo => A): Option[A] =
-    ensuredCredentials(credsFile, creds, prompt) map { cred =>
+    ensuredCredentials(credsFile, creds) map { cred =>
       val repo = cachedRepo(cred, org, repoName)
       f(repo)
     }
@@ -55,57 +55,19 @@ object Bintray {
     repoCache.getOrElseUpdate((credential, org, repoName), BintrayRepo(credential, org, repoName))
 
   private[bintray] def ensuredCredentials(
-    credsFile: File, creds: Option[BintrayCredentials], prompt: Boolean = true): Option[BintrayCredentials] =
+    credsFile: File, creds: Option[BintrayCredentials]): Option[BintrayCredentials] =
     creds match {
       case None =>
-        if (prompt) {
-          println("bintray-sbt requires your bintray credentials.")
-          saveBintrayCredentials(credsFile)(requestCredentials())
-          ensuredCredentials(credsFile, creds, prompt)
-        } else {
-          println(s"No bintray credentials provided in environment, parameters or $credsFile.")
-          println("Some bintray features depend on this.")
-          None
-        }
+        println(s"No bintray credentials provided in environment, parameters or $credsFile.")
+        println("Some bintray features depend on this.")
+        None
       case creds => creds
-    }
-
-  /** assign credentials or ask for new ones */
-  private[bintray] def changeCredentials(credsFile: File, creds: Option[BintrayCredentials]): Unit =
-    creds match {
-      case None =>
-        saveBintrayCredentials(credsFile)(requestCredentials())
-      case Some(BintrayCredentials(user, pass)) =>
-        saveBintrayCredentials(credsFile)(requestCredentials(Some(user), Some(pass)))
     }
 
   private[bintray] def buildResolvers(creds: Option[BintrayCredentials], org: Option[String], repoName: String): Seq[Resolver] =
     creds.fold(Seq.empty[Resolver]) {
       case BintrayCredentials(user, _) => Seq(Resolver.bintrayRepo(org.getOrElse(user), repoName))
     }
-
-  private def saveBintrayCredentials(to: File)(creds: (String, String)) = {
-    println(s"saving credentials to $to")
-    val (name, pass) = creds
-    BintrayCredentials.writeBintray(name, pass, to)
-    println("reload project for sbt setting `publishTo` to take effect")
-  }
-
-  // todo: generalize this for both bintray & sonatype credential prompts
-  private def requestCredentials(
-    defaultName: Option[String] = None,
-    defaultKey: Option[String] = None): (String, String) = {
-    val name = Prompt("Enter bintray username%s" format(
-      defaultName.map(" (%s)".format(_)).getOrElse(""))).orElse(defaultName).getOrElse {
-      sys.error("bintray username required")
-    }
-    val pass = Prompt.descretely("Enter bintray API key %s" format(
-      defaultKey.map(_ => "(use current)").getOrElse("(under https://bintray.com/profile/edit)")))
-        .orElse(defaultKey).getOrElse {
-          sys.error("bintray API key required")
-        }
-    (name, pass)
-  }
 
   private[bintray] object await {
     import scala.concurrent.{ Await, Future }

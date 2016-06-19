@@ -121,8 +121,7 @@ case class BintrayRepo(credential: BintrayCredentials, org: Option[String], repo
   def syncMavenCentral(packageName: String, vers: String, creds: Seq[Credentials], log: Logger): Unit =
     {
       val btyVersion = repo.get(packageName).version(vers)
-      val BintrayCredentials(sonauser, sonapass) =
-        resolveSonatypeCredentials(creds)
+      val BintrayCredentials(sonauser, sonapass) = sonatypeCredentials(creds)
       await.result(
         btyVersion.mavenCentralSync(sonauser, sonapass)(asStatusAndBody)) match {
         case (200, body) =>
@@ -141,24 +140,18 @@ case class BintrayRepo(credential: BintrayCredentials, org: Option[String], repo
         }
     }
 
-  private def resolveSonatypeCredentials(
-    creds: Seq[sbt.Credentials]): BintrayCredentials =
-    Credentials.forHost(creds, BintrayCredentials.sonatype.Host)
-      .map { d => (d.userName, d.passwd) }
-      .getOrElse(requestSonatypeCredentials) match {
-        case (user, pass) => BintrayCredentials(user, pass)
-      }
-
   /** Search Sonatype credentials in the following order:
    *  1. Cache
    *  2. System properties
    *  3. Environment variables
-   *  4. User input */
-  private def requestSonatypeCredentials: (String, String) =
+   *  4. Sbt credentials
+   **/
+  private def sonatypeCredentials(creds: Seq[sbt.Credentials]): BintrayCredentials =
     cachedCredentials("sonatype")
       .orElse(propsCredentials("sonatype"))
       .orElse(envCredentials("sonatype"))
-      .orElse(promptCredentials("sonatype"))
+      .orElse(sbtCredentials(creds, sonatype.Host))
+      .map((BintrayCredentials.apply _).tupled)
       .getOrElse(sys.error("sonatype credentials required"))
 
   /** Lists versions of bintray packages corresponding to the current project */
